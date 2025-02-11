@@ -1,0 +1,51 @@
+version: "3.3"
+services:
+    pot-anima-rabbitmq-broker-{{ PLANT_CODE.lower() }}:
+        image: rsia-south1-docker.pkg.dev/iotedgetryouts/iotedgeregistry/rabbitmq:3-management
+        container_name: pot-anima-rabbitmq-broker-{{ PLANT_CODE.lower() }}
+        hostname: rabbitmq-broker-{{ PLANT_CODE.lower() }}
+        restart: always
+        privileged: true
+        deploy:
+            replicas: 1
+        volumes:
+            - {{ PRODUCT_DIR }}/any/config/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins
+            - {{ PRODUCT_DIR }}/any/config/rabbitmq/broker-onprem/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+            - {{ PRODUCT_DIR }}/any/config/rabbitmq/broker-onprem/definitions.json:/etc/rabbitmq/definitions.json
+        environment:
+            https_proxy: ${https_proxy}
+        networks:
+            - anima_network
+        healthcheck:
+            test: ["CMD", "rabbitmqctl", "list_connections"]
+    
+    {{ APPLICATION_SERVICE_NAME }}-{{ PLANT_CODE.lower() }}:
+        image: __IMAGE__
+        container_name: {{ APPLICATION_SERVICE_NAME }}-{{ PLANT_CODE.lower() }}
+        labels:
+            PLANT_CODE: {{ PLANT_CODE }}
+        restart: always
+        depends_on:
+            - pot-anima-rabbitmq-broker-{{ PLANT_CODE.lower() }}
+        {% if environment == "PROD" %}
+        volumes:
+            - {{ KEYS_DIR }}/pot-anima-{{ environment.lower() }}:/srv/pot/anima/config/secrets/gcp_credential.json
+            - {{ KEYS_DIR }}/gcp-{{ environment.lower() }}-pot-anima-restapi-secret:/srv/pot/anima/config/secrets/backend_apikey.json
+            - {{ SERVICE_DIR }}/models:/srv/pot/anima/models
+        {% elif environment == "STAG" or environment == "DEV" %}
+        volumes:
+            - {{ KEYS_DIR }}/gcp-{{ environment.lower() }}-pot-anima-bec:/srv/pot/anima/config/secrets/gcp_credential.json
+            - {{ KEYS_DIR }}/gcp-{{ environment.lower() }}-pot-anima-restapi-secret:/srv/pot/anima/config/secrets/backend_apikey.json
+            - {{ SERVICE_DIR }}/models:/srv/pot/anima/models
+        {% endif %}
+        command: ["celery", "-A", "src.worker:app", "worker", "-l", "info" ,"-Q", "model_inference_queue", "--pool", "threads"]
+        environment:
+            APP_ENV: {{ environment }}
+            APP_PLANT: {{ PLANT_CODE }}
+            https_proxy: ${https_proxy}
+            GOOGLE_APPLICATION_CREDENTIALS: /srv/pot/anima/config/secrets/gcp_credential.json
+        networks:
+            - anima_network
+networks:
+    anima_network:
+        name: anima_network
